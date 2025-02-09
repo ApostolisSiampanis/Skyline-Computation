@@ -32,8 +32,8 @@
 
 class SkylineI {
 public:
-  SkylineI() { }
-  virtual ~SkylineI() { }
+  SkylineI() = default;
+  virtual ~SkylineI() = default;
 
   /* Pure virtual methods */
   virtual void Init(float** data) = 0;

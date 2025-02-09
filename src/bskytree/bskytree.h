@@ -17,34 +17,41 @@
 
 using namespace std;
 
-class BSkyTree: public SkylineI {
+class BSkyTree final : public SkylineI {
 public:
-  BSkyTree( const uint32_t num_threads, const uint32_t n,
-      const uint32_t d, float** dataset );
-  virtual ~BSkyTree();
+    BSkyTree(uint32_t num_threads, uint32_t n, uint32_t d);
 
-  void Init( float** dataset );
-  vector<int> Execute( void );
+    ~BSkyTree() override;
+
+    void Init(float **dataset) override;
+
+    vector<int> Execute() override;
 
 private:
-  void BSkyTreeS_ALGO();
-  void DoPartioning();
+    void BSkyTreeS_ALGO();
 
-  // PivotSelection methods
-  void SelectBalanced();
-  vector<float> SetRangeList( const vector<float>& min_list,
-      const vector<float>& max_list );
-  float ComputeDistance( const float* value, const vector<float>& min_list,
-      const vector<float>& range_list );
-  bool EvaluatePoint( const uint32_t pos );
+    void DoPartitioning();
 
-  const uint32_t num_threads_;
-  const uint32_t n_;
-  const uint32_t d_;
-  vector<TUPLE_S> data_;
+    // PivotSelection methods
+    void SelectBalanced();
 
-  vector<int> skyline_;
-  vector<int> eqm_; // "equivalence matrix"
+    static vector<float> SetRangeList(const vector<float> &min_list,
+                                      const vector<float> &max_list);
+
+    static float ComputeDistance(const float *value, const vector<float> &min_list,
+                                 const vector<float> &range_list);
+
+    bool EvaluatePoint(uint32_t pos) const;
+
+    static void *parallel_execution(void *arg);
+
+    const uint32_t num_threads_;
+    const uint32_t n_;
+    const uint32_t d_;
+    vector<TUPLE_S> data_;
+
+    vector<int> skyline_;
+    vector<int> eqm_; // "equivalence matrix"
 };
 
 #endif /* BSKYTREE_H_ */

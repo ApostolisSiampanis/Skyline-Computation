@@ -13,11 +13,26 @@
 #include "common/common.h"
 #include "util/timing.h"
 
-int head, tail; // TODO: use mutex if many threads update the vars
-vector<TUPLE_S> *S;
-volatile bool *dead;
-vector<pthread_t> tid;
 pthread_barrier_t barrier;
+uint32_t head, tail;
+
+
+struct ThreadData {
+    vector<TUPLE_S> *S;
+    volatile bool *dead;
+    vector<int> *skyline;
+    uint32_t thread_id, num_of_threads;
+
+    ThreadData() = default;
+
+    ThreadData(vector<TUPLE_S> *const s, volatile bool *const dead, vector<int> *const skyline,
+               const uint32_t thread_id, const uint32_t num_of_threads): S(s),
+                                                                         dead(dead),
+                                                                         skyline(skyline),
+                                                                         thread_id(thread_id),
+                                                                         num_of_threads(num_of_threads) {
+    }
+};
 
 BSkyTree::BSkyTree(const uint32_t num_threads,
                    const uint32_t n, const uint32_t d) : num_threads_(num_threads), n_(n), d_(d) {
@@ -62,26 +77,36 @@ void BSkyTree::BSkyTreeS_ALGO() {
     //  updateProfiler( "partitioning" );
 
     //  initProfiler();
-    S = &data_; // Alias
-    dead = new bool[S->size()];
-    memset(const_cast<bool *>(dead), 0, sizeof(bool) * S->size());
-    head = 1; // always points to the 1st tuple after confirmed heads
-    tail = S->size() - 1; // always points to the last (active) tuple
+    vector<TUPLE_S> &S = data_; // Alias
+    volatile bool *dead = new bool[S.size()];
+    memset(const_cast<bool *>(dead), 0, sizeof(bool) * S.size());
+
+    head = 1;
+    tail = S.size() - 1; // always points to the last (active) tuple
 
     // Initialize barrier
     pthread_barrier_init(&barrier, nullptr, num_threads_);
 
     // Create threads
-    tid.resize(num_threads_);
-    for (int i = 1; i <= num_threads_; i++) pthread_create(&tid[i], nullptr, parallel_execution, this);
+    const auto tid = new pthread_t[num_threads_];
+    const auto thread_data = new ThreadData [num_threads_]; // ThreadData *thread_data = new ThreadData [num_threads_];
+
+    for (int i = 0; i < num_threads_; i++) {
+        thread_data[i] = ThreadData(&S, dead, &skyline_, i, num_threads_);
+        pthread_create(&tid[i], nullptr, parallel_execution, &thread_data[i]);
+    }
 
     // Main thread waits for the termination of worker threads
-    for (int i = 0; i < num_threads_; i++) pthread_join(tid[i], nullptr);
+    for (int i = 0; i < num_threads_; i++) {
+        pthread_join(tid[i], nullptr);
+    }
 
     // Destroy barrier
     pthread_barrier_destroy(&barrier);
 
-    delete [] dead;
+    delete[] tid;
+    delete[] thread_data;
+    delete[] dead;
 }
 
 /*
@@ -217,32 +242,30 @@ bool BSkyTree::EvaluatePoint(const uint32_t pos) const {
 }
 
 void *BSkyTree::parallel_execution(void *arg) {
-    auto *self = static_cast<BSkyTree *>(arg); // Convert argument to class instance
-
-    // find thread id
-    int thread_id = 0;
-    for (int i = 0; i < tid.size(); i++) {
-        if (pthread_equal(tid[i], pthread_self())) {
-            thread_id = i;
-            break;
-        }
-    }
+    const auto *thread_data = static_cast<ThreadData *>(arg); // ThreadData *thread_data2 = (ThreadData *) arg;
+    const auto thread_id = thread_data->thread_id;
+    const auto num_of_threads = thread_data->num_of_threads;
+    const auto S = thread_data->S;
+    const auto dead = thread_data->dead;
 
     while (head < tail) {
-        int htail = head + BSKYTREE_ACCUM - 1 < tail ? head + BSKYTREE_ACCUM - 1 : tail;
-        const uint32_t num_of_elements = (htail - head) / self->num_threads_;
-        const uint32_t p_head = thread_id == 0 ? head : head + num_of_elements + 1;
-        const uint32_t p_htail = thread_id == 0 ? head + num_of_elements : p_head + num_of_elements;
-        const uint32_t p_tail = tail;
+        uint32_t htail = head + BSKYTREE_ACCUM - 1 < tail ? head + BSKYTREE_ACCUM - 1 : tail;
+        const uint32_t p_head = head, p_tail = tail, p_htail = htail;
+        uint32_t const num_heads = p_htail - p_head + 1;
+        uint32_t const chunk = (num_heads + num_of_threads - 1) / num_of_threads;
+        uint32_t const start = p_head + thread_id * chunk;
+        uint32_t end = p_head + (thread_id + 1) * chunk - 1;
+        end = end <= p_htail ? end : p_htail;
 
-        for (uint32_t th = p_head; th <= p_htail; ++th) {
+        for (uint32_t th = start; th <= end; th++) {
             // th -> temporal head
-            int cur = p_htail + 1;
+            uint32_t cur = p_htail + 1;
             while (cur <= p_tail) {
                 if (dead[cur]) {
                     ++cur;
                     continue;
                 }
+
                 // Check for partial dominance:
                 if (((*S)[th].partition & (*S)[cur].partition) == (*S)[th].partition
                     || ((*S)[th].partition & (*S)[cur].partition) == (*S)[cur].partition) {
@@ -253,7 +276,7 @@ void *BSkyTree::parallel_execution(void *arg) {
                         cur++;
                     } else if (dt_test == DOM_RIGHT) {
                         dead[cur] = true;
-                        S[th] = S[cur];
+                        (*S)[th] = (*S)[cur];
                         cur = p_htail + 1;
                         //          S[cur] = S[tail--]; no compression because of multi-threading
                     } else {
@@ -267,56 +290,58 @@ void *BSkyTree::parallel_execution(void *arg) {
 
         pthread_barrier_wait(&barrier);
 
-        for (uint32_t th = head; th <= htail; ++th) {
-            // th -> temporal head
-            int c = th + 1;
-            while (c <= htail) {
-                if ((*S)[th].pid == (*S)[c].pid) {
-                    dead[htail] = true; // TODO: htail is shared variable
-                    S[c] = S[htail--]; // TODO: htail is shared variable
-                } else {
-                    const uint32_t dt_test = DT_dvc((*S)[th], (*S)[c]);
-                    if (dt_test == DOM_LEFT) {
-                        dead[htail] = true; // TODO: htail is shared variable
-                        S[c] = S[htail--]; // TODO: htail is shared variable
-                    } else if (dt_test == DOM_RIGHT) {
-                        S[th] = S[c];
-                        dead[htail] = true; // TODO: htail is shared variable
-                        S[c] = S[htail--]; // TODO: htail is shared variable
-                        c = th + 1;
+        if (thread_id == 0) {
+            for (uint32_t th = head; th <= htail; ++th) {
+                // th -> temporal head
+                uint32_t c = th + 1;
+                while (c <= htail) {
+                    if ((*S)[th].pid == (*S)[c].pid) {
+                        dead[htail] = true;
+                        (*S)[c] = (*S)[htail--];
                     } else {
-                        c++; // two heads are incomparable
+                        const uint32_t dt_test = DT_dvc((*S)[th], (*S)[c]);
+                        if (dt_test == DOM_LEFT) {
+                            dead[htail] = true;
+                            (*S)[c] = (*S)[htail--];
+                        } else if (dt_test == DOM_RIGHT) {
+                            (*S)[th] = (*S)[c];
+                            dead[htail] = true;
+                            (*S)[c] = (*S)[htail--];
+                            c = th + 1;
+                        } else {
+                            c++; // two heads are incomparable
+                        }
                     }
                 }
             }
-        }
 
-        // TODO: barrier
+            // heads are processed, so update it:
+            head = htail + 1;
+            //    updateProfiler( "sequential head processing" );
 
-        // heads are processed, so update it:
-        head = htail + 1;
-        //    updateProfiler( "sequential head processing" );
+            // Compress by removing dead tuples:
+            uint32_t head_dead = head; // will store 1st dead tuple from head & upwards
+            uint32_t tail_alive = tail; // will store 1st alive tuple from tail & downwards
+            while (head_dead < tail_alive) {
+                while (!dead[head_dead] && head_dead < tail_alive) ++head_dead;
 
-        // Compress by removing dead tuples:
-        int head_dead = head; // will store 1st dead tuple from head & upwards
-        int tail_alive = tail; // will store 1st alive tuple from tail & downwards
-        while (head_dead < tail_alive) {
-            while (!dead[head_dead] && head_dead < tail_alive) ++head_dead;
+                while (dead[tail_alive]) --tail_alive;
 
-            while (dead[tail_alive]) --tail_alive;
-
-            if (tail_alive > head_dead) {
-                dead[head_dead] = false;
-                dead[tail_alive] = true;
-                S[head_dead++] = S[tail_alive--];
+                if (tail_alive > head_dead) {
+                    dead[head_dead] = false;
+                    dead[tail_alive] = true;
+                    (*S)[head_dead++] = (*S)[tail_alive--];
+                }
             }
+            // Update tail after compression:
+            tail = tail_alive;
+            while (dead[tail]) --tail;
+            //    updateProfiler( "sequential compression" );
         }
-        // Update tail after compression:
-        tail = tail_alive;
-        while (dead[tail]) --tail;
-        //    updateProfiler( "sequential compression" );
+
+        pthread_barrier_wait(&barrier);
     } // Skyline computed!
 
-    for (uint32_t i = 0; i <= tail; ++i) self->skyline_.push_back((*S)[i].pid); // TODO: parallelize it ⁉️
+    if (thread_id == 0) for (uint32_t i = 0; i <= tail; ++i) thread_data->skyline->push_back((*S)[i].pid);
     return nullptr;
 }

@@ -88,6 +88,15 @@ Other build options:
 | `-s` | Algorithms to run (only `bskytree` is supported) |
 | `-v` | Verbose mode (not for performance measurements) |
 
+## Contributors
+
+<table>
+  <tr>
+    <td align="center"><a href="https://github.com/ApostolisSiampanis"><img src="https://avatars.githubusercontent.com/u/75365398?v=4" width="100px;" alt="Apostolis Siampanis"/><br /><sub><b>Apostolis Siampanis</b></sub></a><br /></td>
+    <td align="center"><a href="https://github.com/dimitrisstyl7"><img src="https://avatars.githubusercontent.com/u/75742419?v=4" width="100px;" alt="Dimitris Stylianou"/><br /><sub><b>Dimitris Stylianou</b></sub></a><br /></td>
+  </tr>
+</table>
+
 ## Acknowledgments
 This project was developed as part of the "Algorithmic Techniques and Applications" MSc course at the University of Piraeus. It is based on [SkyBench](https://github.com/sean-chester/SkyBench) by Darius Šidlauskas, Sean Chester and Kenneth S. Bøgh, released under the MIT License. Contributions and feedback are always welcome!
 
